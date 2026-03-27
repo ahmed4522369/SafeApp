@@ -8,13 +8,13 @@ on:
   workflow_dispatch:
 
 env:
-  BUILDOZER_LOG_LEVEL: warning
+  BUILDOZER_LOG_LEVEL: debug
   JAVA_HOME: /usr/lib/jvm/java-11-openjdk-amd64
 
 jobs:
   build-apk:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     
     steps:
     - name: ⬇️ Checkout Code
@@ -22,7 +22,7 @@ jobs:
       with:
         fetch-depth: 1
     
-    - name: 🐍 Setup Python 3.9 (Cached)
+    - name: 🐍 Setup Python 3.9
       uses: actions/setup-python@v4
       with:
         python-version: '3.9'
@@ -41,16 +41,21 @@ jobs:
           wget \
           curl \
           unzip \
-          zip
+          zip \
+          autoconf \
+          automake \
+          libtool
     
-    - name: 📥 Install Python Dependencies (Fast)
+    - name: 📥 Install Python Dependencies
       run: |
         python -m pip install --upgrade pip setuptools wheel --quiet
-        pip install --no-cache-dir --quiet \
+        pip install --quiet \
           buildozer==1.5.0 \
           cython==0.29.37 \
           kivy==2.3.0 \
-          requests
+          requests \
+          pyjnius \
+          plyer
     
     - name: 🔧 Setup Android SDK/NDK
       uses: android-actions/setup-android@v2
@@ -59,94 +64,117 @@ jobs:
         ndk-version: 25.2.9519653
         cache: true
     
-    - name: ⚡ Cache Buildozer & Dependencies
+    - name: ⚡ Cache Buildozer
       uses: actions/cache@v4
       with:
         path: |
           ~/.buildozer
           ~/.android
           /root/.gradle
-        key: buildozer-cache-${{ runner.os }}-${{ hashFiles('buildozer.spec') }}
+        key: buildozer-${{ runner.os }}-${{ hashFiles('buildozer.spec') }}
         restore-keys: |
-          buildozer-cache-${{ runner.os }}-
+          buildozer-${{ runner.os }}-
     
-    - name: 🧹 Smart Cache Cleanup
+    - name: 🧹 Cleanup Cache
       run: |
-        echo "🧹 Cleaning old Python cache files..."
         find ~/.buildozer -type f -name "*.pyc" -delete 2>/dev/null || true
         find ~/.buildozer -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
-        echo "✅ Cache cleanup completed"
     
-    - name: 📋 Display Environment
+    - name: 📋 Check Environment
       run: |
-        echo "Python version:"
+        echo "=== Python ==="
         python --version
-        echo "Java version:"
+        echo ""
+        echo "=== Java ==="
         java -version
-        echo "Android SDK path: $ANDROID_HOME"
-        echo "Build tools available:"
-        ls -1 $ANDROID_HOME/build-tools/ 2>/dev/null | tail -3
+        echo ""
+        echo "=== Android SDK ==="
+        echo "ANDROID_HOME: $ANDROID_HOME"
+        ls -la $ANDROID_HOME/build-tools/ | tail -5
+        echo ""
+        echo "=== Buildozer Version ==="
+        buildozer --version
     
-    - name: 📱 Build APK (Optimized)
+    - name: 🔍 Check buildozer.spec
       run: |
-        echo "⚡ Starting APK build..."
-        ulimit -n 4096
+        if [ -f "buildozer.spec" ]; then
+          echo "✅ buildozer.spec found"
+          cat buildozer.spec | head -20
+        else
+          echo "❌ buildozer.spec NOT found - Creating default..."
+          buildozer init
+        fi
+    
+    - name: 📱 Build APK
+      run: |
+        echo "========================================="
+        echo "🚀 Starting APK Build..."
+        echo "========================================="
         
-        # تحديد متغيرات البناء
+        ulimit -n 4096
         export JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64
         export ANDROID_HOME=$ANDROID_HOME
         export ANDROID_SDK_ROOT=$ANDROID_HOME
         export ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/25.2.9519653
         
-        # بناء APK مع تقليل المخرجات
-        buildozer android release -v 2>&1 | grep -E "(Building|Compiling|Linking|Successfully|error|Error|ERROR)" || buildozer android release
+        # محاولة البناء مع عرض كل الأخطاء
+        buildozer android release 2>&1
         
-        echo "✅ Build completed"
-      timeout-minutes: 40
-    
-    - name: 📋 Verify APK Generation
-      run: |
-        echo "📦 Searching for generated APK files..."
-        if [ -d "bin" ]; then
-          echo "Contents of bin directory:"
-          ls -lh bin/
-          
-          if [ -f "bin"/*.apk ]; then
-            echo "✅ APK found successfully!"
-            file bin/*.apk
-            du -h bin/*.apk
-          else
-            echo "⚠️ No APK files found in bin directory"
-            find . -name "*.apk" -type f 2>/dev/null | head -5
-          fi
+        BUILD_STATUS=$?
+        
+        if [ $BUILD_STATUS -eq 0 ]; then
+          echo "✅ Build completed successfully"
         else
-          echo "❌ bin directory does not exist"
+          echo "❌ Build failed with exit code: $BUILD_STATUS"
+          echo ""
+          echo "========================================="
+          echo "🔍 Checking for error logs..."
+          echo "========================================="
+          
+          # عرض آخر 100 سطر من السجل
+          if [ -f ".buildozer/android/platform/build-arm64-v8a_armeabi-v7a/build/outputs/build.log" ]; then
+            echo "Found build.log:"
+            tail -100 .buildozer/android/platform/build-arm64-v8a_armeabi-v7a/build/outputs/build.log
+          fi
+          
+          # البحث عن أي ملفات سجل
+          find .buildozer -name "*.log" -type f -exec tail -50 {} \; 2>/dev/null
+          
+          exit 1
+        fi
+      timeout-minutes: 50
+    
+    - name: 📦 Verify APK
+      if: success()
+      run: |
+        echo "========================================="
+        echo "✅ APK Verification"
+        echo "========================================="
+        
+        if find bin -name "*.apk" -type f 2>/dev/null | grep -q .; then
+          echo "✅ APK files found:"
+          ls -lh bin/*.apk
+          file bin/*.apk
+          echo ""
+          echo "APK size:"
+          du -h bin/*.apk
+        else
+          echo "❌ No APK files found!"
+          echo "Searching entire project..."
           find . -name "*.apk" -type f 2>/dev/null
+          exit 1
         fi
     
-    - name: 📦 Upload APK Artifact
-      if: always()
+    - name: 📦 Upload APK
+      if: success()
       uses: actions/upload-artifact@v4
       with:
         name: AntiVirus-APK-${{ github.run_number }}
         path: bin/*.apk
         retention-days: 30
-        if-no-files-found: warn
-        compression-level: 0
+        if-no-files-found: error
     
-    - name: 📊 Build Summary
-      if: always()
-      run: |
-        echo "========================================="
-        echo "🔨 Build Summary"
-        echo "========================================="
-        echo "Build Status: ${{ job.status }}"
-        echo "Workflow Run: ${{ github.run_number }}"
-        echo "Branch: ${{ github.ref_name }}"
-        echo "Commit: ${{ github.sha }}"
-        echo "========================================="
-    
-    - name: 🚀 Create Release (on tag)
+    - name: 🚀 Create Release
       if: startsWith(github.ref, 'refs/tags/') && success()
       uses: actions/create-release@v1
       env:
@@ -156,23 +184,35 @@ jobs:
         release_name: AntiVirus Guard ${{ github.ref }}
         body: |
           🛡️ AntiVirus Guard APK Release
-          
-          **Build Information:**
-          - Build Number: ${{ github.run_number }}
-          - Branch: ${{ github.ref_name }}
-          - Commit: ${{ github.sha }}
-          
-          **Features:**
-          - ✅ Optimized for speed
-          - ✅ Python 3.9 compatible
-          - ✅ Cython 0.29.37
-          - ✅ Android API 31
+          Build: ${{ github.run_number }}
         draft: false
         prerelease: false
     
-    - name: 📧 Notify on Failure
+    - name: 📊 Build Failure Report
       if: failure()
       run: |
-        echo "❌ Build failed!"
-        echo "Please check the logs above for details."
-        exit 1
+        echo "========================================="
+        echo "❌ BUILD FAILED - Diagnostic Report"
+        echo "========================================="
+        echo ""
+        echo "🔍 System Information:"
+        uname -a
+        echo ""
+        echo "🔍 Disk Space:"
+        df -h
+        echo ""
+        echo "🔍 Memory:"
+        free -h
+        echo ""
+        echo "🔍 Python packages:"
+        pip list | grep -E "buildozer|cython|kivy"
+        echo ""
+        echo "🔍 Gradle cache:"
+        du -sh ~/.gradle 2>/dev/null || echo "No gradle cache"
+        echo ""
+        echo "🔍 Buildozer cache:"
+        du -sh ~/.buildozer 2>/dev/null || echo "No buildozer cache"
+        echo ""
+        echo "========================================="
+        echo "Please check the logs above for details"
+        echo "========================================="
