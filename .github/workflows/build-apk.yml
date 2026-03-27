@@ -1,4 +1,4 @@
-name: ⚡ Fast APK Build
+name: ⚡ Build APK - Fast & Reliable
 
 on:
   push:
@@ -8,12 +8,12 @@ on:
   workflow_dispatch:
 
 env:
-  BUILDOZER_LOG_LEVEL: debug
+  BUILDOZER_LOG_LEVEL: info
 
 jobs:
   build-apk:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 120
     
     steps:
     - name: ⬇️ Checkout Code
@@ -43,12 +43,14 @@ jobs:
           autoconf \
           automake \
           libtool \
-          pkg-config
+          pkg-config \
+          openjdk-17-jdk \
+          ant
     
     - name: 📥 Install Python Dependencies
       run: |
-        python -m pip install --upgrade pip setuptools wheel --quiet
-        pip install --quiet \
+        python -m pip install --upgrade pip setuptools wheel -q
+        pip install -q \
           buildozer==1.5.0 \
           cython==0.29.37 \
           kivy==2.3.0 \
@@ -59,68 +61,148 @@ jobs:
     - name: ⚡ Cache Buildozer
       uses: actions/cache@v4
       with:
-        path: ~/.buildozer
-        key: buildozer-${{ runner.os }}-${{ hashFiles('buildozer.spec') }}
+        path: |
+          ~/.buildozer
+          ~/.android
+        key: buildozer-${{ runner.os }}-${{ hashFiles('buildozer.spec') }}-v2
         restore-keys: |
           buildozer-${{ runner.os }}-
     
-    - name: 🧹 Cleanup Cache
+    - name: 🔍 Verify buildozer.spec exists
       run: |
-        find ~/.buildozer -type f -name "*.pyc" -delete 2>/dev/null || true
-        find ~/.buildozer -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
-    
-    - name: 🔍 Check buildozer.spec
-      run: |
-        if [ -f "buildozer.spec" ]; then
-          echo "✅ buildozer.spec found"
-          head -30 buildozer.spec
-        else
-          echo "❌ buildozer.spec NOT found"
-          exit 1
+        if [ ! -f "buildozer.spec" ]; then
+          echo "❌ buildozer.spec NOT found!"
+          echo "Creating default..."
+          buildozer init
         fi
+        echo "✅ buildozer.spec found"
     
-    - name: 📱 Build APK
-      timeout-minutes: 50
+    - name: 🔧 Fix buildozer.spec configuration
+      run: |
+        # إصلاح المسارات والإعدادات
+        sed -i 's/android.arch = .*/android.archs = arm64-v8a,armeabi-v7a/' buildozer.spec
+        sed -i 's/android.ndk = .*/android.ndk = 25b/' buildozer.spec
+        sed -i 's/android.sdk = .*/android.sdk = 31/' buildozer.spec
+        sed -i 's/android.api = .*/android.api = 31/' buildozer.spec
+        sed -i 's/android.minapi = .*/android.minapi = 21/' buildozer.spec
+        sed -i 's/android.target_api = .*/android.target_api = 31/' buildozer.spec
+        sed -i 's/android.release_artifact = .*/android.release_artifact = apk/' buildozer.spec
+        
+        echo "✅ buildozer.spec configured"
+        echo ""
+        echo "Current configuration:"
+        grep -E "android\.(arch|ndk|sdk|api)" buildozer.spec
+    
+    - name: 🧹 Clean old builds
+      run: |
+        rm -rf .buildozer/android/platform/build-* 2>/dev/null || true
+        rm -rf .buildozer/android/app/build 2>/dev/null || true
+        echo "✅ Cleaned old builds"
+    
+    - name: 📱 Build APK (Release)
+      timeout-minutes: 90
       env:
-        JAVA_TOOL_OPTIONS: "-Dfile.encoding=UTF-8"
+        JAVA_TOOL_OPTIONS: "-Dfile.encoding=UTF-8 -Xmx2048m"
+        GRADLE_OPTS: "-Xmx2048m"
       run: |
         echo "========================================="
         echo "🚀 Starting APK Build..."
         echo "========================================="
-        buildozer android release
+        echo ""
+        
+        # تعيين متغيرات البيئة
+        export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+        export PATH=$JAVA_HOME/bin:$PATH
+        
+        # عرض معلومات النظام
+        echo "Java version:"
+        java -version
+        echo ""
+        echo "Ant version:"
+        ant -version
+        echo ""
+        
+        # البناء
+        buildozer android release 2>&1 | tee build.log
+        
+        BUILD_STATUS=${PIPESTATUS[0]}
+        
+        if [ $BUILD_STATUS -eq 0 ]; then
+          echo ""
+          echo "✅ Build completed successfully!"
+        else
+          echo ""
+          echo "❌ Build failed with exit code: $BUILD_STATUS"
+          echo ""
+          echo "Last 150 lines of build log:"
+          tail -150 build.log
+          exit 1
+        fi
     
     - name: 📦 Verify APK
       if: success()
       run: |
-        echo "✅ APK files found:"
-        ls -lh bin/*.apk
+        echo "========================================="
+        echo "✅ APK Verification"
+        echo "========================================="
+        echo ""
+        
+        if find bin -name "*.apk" -type f 2>/dev/null | grep -q .; then
+          echo "✅ APK files found:"
+          ls -lh bin/*.apk
+          echo ""
+          echo "File info:"
+          file bin/*.apk
+          echo ""
+          echo "File size:"
+          du -h bin/*.apk
+        else
+          echo "❌ No APK files found!"
+          echo "Searching in build directories..."
+          find . -name "*.apk" -type f 2>/dev/null | head -10
+          exit 1
+        fi
     
-    - name: 📦 Upload APK
+    - name: 📦 Upload APK Artifact
       if: success()
       uses: actions/upload-artifact@v4
       with:
-        name: AntiVirus-APK-${{ github.run_number }}
+        name: SafeApp-APK-${{ github.run_number }}
         path: bin/*.apk
         retention-days: 30
         if-no-files-found: error
     
-    - name: 🚀 Create Release
+    - name: 🚀 Create GitHub Release
       if: startsWith(github.ref, 'refs/tags/') && success()
       uses: actions/create-release@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         tag_name: ${{ github.ref }}
-        release_name: AntiVirus Guard ${{ github.ref }}
+        release_name: SafeApp ${{ github.ref }}
         body: |
-          🛡️ AntiVirus Guard APK Release
-          Build: ${{ github.run_number }}
-          Commit: ${{ github.sha }}
+          🛡️ SafeApp Release
+          
+          **Build Information:**
+          - Build Number: ${{ github.run_number }}
+          - Commit: ${{ github.sha }}
+          - Branch: ${{ github.ref }}
+          
+          **Download APK from Artifacts**
         draft: false
         prerelease: false
     
-    - name: 📊 Build Failure Report
-      if: failure()
+    - name: 📊 Build Summary
+      if: always()
       run: |
-        echo "❌ BUILD FAILED"
-        echo "Check the logs above for details"
+        echo "========================================="
+        echo "📊 Build Summary"
+        echo "========================================="
+        echo ""
+        echo "Status: ${{ job.status }}"
+        echo "Duration: ${{ job.duration }}"
+        echo "Run Number: ${{ github.run_number }}"
+        echo ""
+        if [ -f "build.log" ]; then
+          echo "Build log size: $(wc -l < build.log) lines"
+        fi
