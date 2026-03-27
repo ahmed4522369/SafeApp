@@ -1,0 +1,178 @@
+name: ⚡ Fast APK Build
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  BUILDOZER_LOG_LEVEL: warning
+  JAVA_HOME: /usr/lib/jvm/java-11-openjdk-amd64
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    
+    steps:
+    - name: ⬇️ Checkout Code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 1
+    
+    - name: 🐍 Setup Python 3.9 (Cached)
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+        cache: 'pip'
+    
+    - name: 📦 Install System Dependencies
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq --no-install-recommends \
+          build-essential \
+          libffi-dev \
+          libssl-dev \
+          python3-dev \
+          openjdk-11-jdk-headless \
+          git \
+          wget \
+          curl \
+          unzip \
+          zip
+    
+    - name: 📥 Install Python Dependencies (Fast)
+      run: |
+        python -m pip install --upgrade pip setuptools wheel --quiet
+        pip install --no-cache-dir --quiet \
+          buildozer==1.5.0 \
+          cython==0.29.37 \
+          kivy==2.3.0 \
+          requests
+    
+    - name: 🔧 Setup Android SDK/NDK
+      uses: android-actions/setup-android@v2
+      with:
+        api-level: 31
+        ndk-version: 25.2.9519653
+        cache: true
+    
+    - name: ⚡ Cache Buildozer & Dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.buildozer
+          ~/.android
+          /root/.gradle
+        key: buildozer-cache-${{ runner.os }}-${{ hashFiles('buildozer.spec') }}
+        restore-keys: |
+          buildozer-cache-${{ runner.os }}-
+    
+    - name: 🧹 Smart Cache Cleanup
+      run: |
+        echo "🧹 Cleaning old Python cache files..."
+        find ~/.buildozer -type f -name "*.pyc" -delete 2>/dev/null || true
+        find ~/.buildozer -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+        echo "✅ Cache cleanup completed"
+    
+    - name: 📋 Display Environment
+      run: |
+        echo "Python version:"
+        python --version
+        echo "Java version:"
+        java -version
+        echo "Android SDK path: $ANDROID_HOME"
+        echo "Build tools available:"
+        ls -1 $ANDROID_HOME/build-tools/ 2>/dev/null | tail -3
+    
+    - name: 📱 Build APK (Optimized)
+      run: |
+        echo "⚡ Starting APK build..."
+        ulimit -n 4096
+        
+        # تحديد متغيرات البناء
+        export JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64
+        export ANDROID_HOME=$ANDROID_HOME
+        export ANDROID_SDK_ROOT=$ANDROID_HOME
+        export ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/25.2.9519653
+        
+        # بناء APK مع تقليل المخرجات
+        buildozer android release -v 2>&1 | grep -E "(Building|Compiling|Linking|Successfully|error|Error|ERROR)" || buildozer android release
+        
+        echo "✅ Build completed"
+      timeout-minutes: 40
+    
+    - name: 📋 Verify APK Generation
+      run: |
+        echo "📦 Searching for generated APK files..."
+        if [ -d "bin" ]; then
+          echo "Contents of bin directory:"
+          ls -lh bin/
+          
+          if [ -f "bin"/*.apk ]; then
+            echo "✅ APK found successfully!"
+            file bin/*.apk
+            du -h bin/*.apk
+          else
+            echo "⚠️ No APK files found in bin directory"
+            find . -name "*.apk" -type f 2>/dev/null | head -5
+          fi
+        else
+          echo "❌ bin directory does not exist"
+          find . -name "*.apk" -type f 2>/dev/null
+        fi
+    
+    - name: 📦 Upload APK Artifact
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: AntiVirus-APK-${{ github.run_number }}
+        path: bin/*.apk
+        retention-days: 30
+        if-no-files-found: warn
+        compression-level: 0
+    
+    - name: 📊 Build Summary
+      if: always()
+      run: |
+        echo "========================================="
+        echo "🔨 Build Summary"
+        echo "========================================="
+        echo "Build Status: ${{ job.status }}"
+        echo "Workflow Run: ${{ github.run_number }}"
+        echo "Branch: ${{ github.ref_name }}"
+        echo "Commit: ${{ github.sha }}"
+        echo "========================================="
+    
+    - name: 🚀 Create Release (on tag)
+      if: startsWith(github.ref, 'refs/tags/') && success()
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ github.ref }}
+        release_name: AntiVirus Guard ${{ github.ref }}
+        body: |
+          🛡️ AntiVirus Guard APK Release
+          
+          **Build Information:**
+          - Build Number: ${{ github.run_number }}
+          - Branch: ${{ github.ref_name }}
+          - Commit: ${{ github.sha }}
+          
+          **Features:**
+          - ✅ Optimized for speed
+          - ✅ Python 3.9 compatible
+          - ✅ Cython 0.29.37
+          - ✅ Android API 31
+        draft: false
+        prerelease: false
+    
+    - name: 📧 Notify on Failure
+      if: failure()
+      run: |
+        echo "❌ Build failed!"
+        echo "Please check the logs above for details."
+        exit 1
