@@ -32,7 +32,7 @@ jobs:
       with:
         distribution: 'temurin'
         java-version: '17'
-        cache: 'gradle'
+        cache: 'none'
     
     - name: 📦 Install System Dependencies
       run: |
@@ -64,6 +64,7 @@ jobs:
           plyer
     
     - name: 🤖 Setup Android SDK Manually
+      timeout-minutes: 15
       run: |
         echo "========================================="
         echo "🤖 Setting up Android SDK..."
@@ -92,7 +93,6 @@ jobs:
         $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager \
           "platforms;android-31" \
           "build-tools;31.0.0" \
-          "ndk;25.2.9519653" \
           --channel=0 \
           --verbose
         
@@ -101,7 +101,6 @@ jobs:
         # حفظ في متغيرات البيئة
         echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
         echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> $GITHUB_ENV
-        echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/25.2.9519653" >> $GITHUB_ENV
         echo "$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/tools/bin" >> $GITHUB_PATH
     
     - name: 📋 Verify Java and Android Setup
@@ -115,16 +114,12 @@ jobs:
         echo ""
         echo "ANDROID_HOME: $ANDROID_HOME"
         echo "ANDROID_SDK_ROOT: $ANDROID_SDK_ROOT"
-        echo "ANDROID_NDK_ROOT: $ANDROID_NDK_ROOT"
         echo ""
         echo "Android SDK platforms:"
         ls -la $ANDROID_HOME/platforms/ 2>/dev/null || echo "No platforms installed"
         echo ""
         echo "Android build-tools:"
         ls -la $ANDROID_HOME/build-tools/ 2>/dev/null || echo "No build-tools installed"
-        echo ""
-        echo "Android NDK:"
-        ls -la $ANDROID_HOME/ndk/ 2>/dev/null || echo "No NDK installed"
         echo ""
         echo "Python version:"
         python --version
@@ -159,6 +154,9 @@ jobs:
         fi
     
     - name: 📱 Build APK
+      timeout-minutes: 50
+      env:
+        JAVA_TOOL_OPTIONS: "-Dfile.encoding=UTF-8"
       run: |
         echo "========================================="
         echo "🚀 Starting APK Build..."
@@ -169,7 +167,6 @@ jobs:
         export JAVA_HOME=$(dirname $(dirname $(readlink -f $(which java))))
         export ANDROID_HOME=$ANDROID_HOME
         export ANDROID_SDK_ROOT=$ANDROID_HOME
-        export ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/25.2.9519653
         export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH
         
         ulimit -n 4096
@@ -192,9 +189,6 @@ jobs:
           tail -100 build.log
           exit 1
         fi
-      timeout-minutes: 50
-      env:
-        JAVA_TOOL_OPTIONS: "-Dfile.encoding=UTF-8"
     
     - name: 📦 Verify APK
       if: success()
