@@ -1,0 +1,76 @@
+name: ⚡ Fast APK Build
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    
+    steps:
+    - name: ⬇️ Checkout Code
+      uses: actions/checkout@v4
+    
+    - name: 🐍 Setup Python 3.10
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+        cache: 'pip'
+    
+    - name: 📦 Install System Dependencies
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq \
+          build-essential \
+          libffi-dev \
+          libssl-dev \
+          python3-dev \
+          openjdk-11-jdk-headless
+    
+    - name: 📥 Install Python Dependencies
+      run: |
+        pip install --upgrade pip setuptools wheel
+        pip install buildozer cython==0.29.32 kivy requests
+    
+    - name: 🔧 Setup Android SDK/NDK
+      uses: android-actions/setup-android@v2
+      with:
+        api-level: 31
+        ndk-version: 25.2.9519653
+    
+    - name: 📱 Build APK
+      run: |
+        export JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64
+        buildozer android release
+      timeout-minutes: 40
+    
+    - name: 📋 List Generated APK
+      run: |
+        ls -lh bin/*.apk 2>/dev/null || echo "APK not found"
+        find . -name "*.apk" -exec ls -lh {} \;
+    
+    - name: 📦 Upload APK Artifact
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: AntiVirus-APK
+        path: bin/*.apk
+        retention-days: 30
+        if-no-files-found: warn
+    
+    - name: 🚀 Create Release (on tag)
+      if: startsWith(github.ref, 'refs/tags/')
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ github.ref }}
+        release_name: AntiVirus Guard ${{ github.ref }}
+        body: "🛡️ AntiVirus Guard APK Release"
+        draft: false
+        prerelease: false
