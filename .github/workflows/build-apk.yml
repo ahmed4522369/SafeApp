@@ -27,13 +27,6 @@ jobs:
         python-version: '3.9'
         cache: 'pip'
     
-    - name: ☕ Setup Java 17 (Required for Android)
-      uses: actions/setup-java@v4
-      with:
-        distribution: 'temurin'
-        java-version: '17'
-        cache: 'none'
-    
     - name: 📦 Install System Dependencies
       run: |
         sudo apt-get update -qq
@@ -63,76 +56,10 @@ jobs:
           pyjnius \
           plyer
     
-    - name: 🤖 Setup Android SDK Manually
-      timeout-minutes: 15
-      run: |
-        echo "========================================="
-        echo "🤖 Setting up Android SDK..."
-        echo "========================================="
-        
-        # إنشاء مجلد Android
-        mkdir -p $HOME/android-sdk
-        export ANDROID_HOME=$HOME/android-sdk
-        export ANDROID_SDK_ROOT=$ANDROID_HOME
-        
-        # تحميل Command Line Tools
-        cd $HOME/android-sdk
-        wget -q https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip
-        unzip -q commandlinetools-linux-9477386_latest.zip
-        rm commandlinetools-linux-9477386_latest.zip
-        
-        # إعادة تنظيم المجلدات
-        mkdir -p cmdline-tools/latest
-        mv cmdline-tools/* cmdline-tools/latest/ 2>/dev/null || true
-        
-        # قبول جميع التراخيص
-        echo "y" | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null 2>&1 || true
-        
-        # تثبيت المكونات المطلوبة
-        echo "Installing Android SDK components..."
-        $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager \
-          "platforms;android-31" \
-          "build-tools;31.0.0" \
-          --channel=0 \
-          --verbose
-        
-        echo "✅ Android SDK setup completed"
-        
-        # حفظ في متغيرات البيئة
-        echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
-        echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> $GITHUB_ENV
-        echo "$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/tools/bin" >> $GITHUB_PATH
-    
-    - name: 📋 Verify Java and Android Setup
-      run: |
-        echo "========================================="
-        echo "✅ Verification"
-        echo "========================================="
-        echo ""
-        echo "Java version:"
-        java -version
-        echo ""
-        echo "ANDROID_HOME: $ANDROID_HOME"
-        echo "ANDROID_SDK_ROOT: $ANDROID_SDK_ROOT"
-        echo ""
-        echo "Android SDK platforms:"
-        ls -la $ANDROID_HOME/platforms/ 2>/dev/null || echo "No platforms installed"
-        echo ""
-        echo "Android build-tools:"
-        ls -la $ANDROID_HOME/build-tools/ 2>/dev/null || echo "No build-tools installed"
-        echo ""
-        echo "Python version:"
-        python --version
-        echo ""
-        echo "Buildozer version:"
-        buildozer --version
-    
     - name: ⚡ Cache Buildozer
       uses: actions/cache@v4
       with:
-        path: |
-          ~/.buildozer
-          ~/.gradle
+        path: ~/.buildozer
         key: buildozer-${{ runner.os }}-${{ hashFiles('buildozer.spec') }}
         restore-keys: |
           buildozer-${{ runner.os }}-
@@ -148,9 +75,8 @@ jobs:
           echo "✅ buildozer.spec found"
           head -30 buildozer.spec
         else
-          echo "❌ buildozer.spec NOT found - Creating..."
-          buildozer init
-          echo "⚠️ Please configure buildozer.spec according to your app"
+          echo "❌ buildozer.spec NOT found"
+          exit 1
         fi
     
     - name: 📱 Build APK
@@ -161,56 +87,13 @@ jobs:
         echo "========================================="
         echo "🚀 Starting APK Build..."
         echo "========================================="
-        echo ""
-        
-        # تعيين متغيرات البيئة
-        export JAVA_HOME=$(dirname $(dirname $(readlink -f $(which java))))
-        export ANDROID_HOME=$ANDROID_HOME
-        export ANDROID_SDK_ROOT=$ANDROID_HOME
-        export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH
-        
-        ulimit -n 4096
-        
-        # محاولة البناء
-        buildozer android release 2>&1 | tee build.log
-        
-        BUILD_STATUS=${PIPESTATUS[0]}
-        
-        if [ $BUILD_STATUS -eq 0 ]; then
-          echo ""
-          echo "✅ Build completed successfully"
-        else
-          echo ""
-          echo "❌ Build failed with exit code: $BUILD_STATUS"
-          echo ""
-          echo "========================================="
-          echo "🔍 Last 100 lines of build log:"
-          echo "========================================="
-          tail -100 build.log
-          exit 1
-        fi
+        buildozer android release
     
     - name: 📦 Verify APK
       if: success()
       run: |
-        echo "========================================="
-        echo "✅ APK Verification"
-        echo "========================================="
-        echo ""
-        
-        if find bin -name "*.apk" -type f 2>/dev/null | grep -q .; then
-          echo "✅ APK files found:"
-          ls -lh bin/*.apk
-          echo ""
-          file bin/*.apk
-          echo ""
-          du -h bin/*.apk
-        else
-          echo "❌ No APK files found!"
-          echo "Searching entire project..."
-          find . -name "*.apk" -type f 2>/dev/null || echo "No APK found anywhere"
-          exit 1
-        fi
+        echo "✅ APK files found:"
+        ls -lh bin/*.apk
     
     - name: 📦 Upload APK
       if: success()
@@ -239,22 +122,5 @@ jobs:
     - name: 📊 Build Failure Report
       if: failure()
       run: |
-        echo "========================================="
-        echo "❌ BUILD FAILED - Diagnostic Report"
-        echo "========================================="
-        echo ""
-        echo "🔍 Java version:"
-        java -version 2>&1 || echo "Java not found"
-        echo ""
-        echo "🔍 Android SDK:"
-        echo "ANDROID_HOME: $ANDROID_HOME"
-        ls -la $ANDROID_HOME/ 2>/dev/null || echo "ANDROID_HOME not set"
-        echo ""
-        echo "🔍 Build log (last 150 lines):"
-        if [ -f "build.log" ]; then
-          tail -150 build.log
-        else
-          echo "No build.log found"
-        fi
-        echo ""
-        echo "========================================="
+        echo "❌ BUILD FAILED"
+        echo "Check the logs above for details"
